@@ -778,45 +778,10 @@ def tint_panel_white(window):
 
 
 def style_window_title_bold(window, title=SCRIPT_TITLE):
+	# Only set the title string. Do not walk the private titlebar views or
+	# force boldSystemFont — that can clip glyphs (e.g. a cut through the "r").
 	try:
-		nsw = window.getNSWindow()
-		nsw.setTitle_(title)
-	except Exception:
-		return
-
-	def _walk(view, depth=0):
-		if view is None or depth > 10:
-			return False
-		try:
-			cls = view.className() if hasattr(view, "className") else ""
-			if "TextField" in str(cls) or "TitleText" in str(cls):
-				try:
-					val = view.stringValue()
-				except Exception:
-					val = None
-				if val == title and NSFont is not None:
-					try:
-						size = view.font().pointSize() if view.font() else 13.0
-					except Exception:
-						size = 13.0
-					view.setFont_(NSFont.boldSystemFontOfSize_(size))
-					try:
-						view.setStringValue_(title)
-					except Exception:
-						pass
-					return True
-		except Exception:
-			pass
-		try:
-			for sub in view.subviews() or []:
-				if _walk(sub, depth + 1):
-					return True
-		except Exception:
-			pass
-		return False
-
-	try:
-		_walk(nsw.contentView().superview())
+		window.getNSWindow().setTitle_(title)
 	except Exception:
 		pass
 

@@ -3,6 +3,8 @@
 Open-source [Glyphs](https://glyphsapp.com) script that cuts a geometric semicircle into a stem (straight or diagonal).
 
 
+![GRvx Cutter panel and goniometer preview in Glyphs](docs/preview.jpg)
+
 **Version:** 0.1.0 · **License:** MIT · **UI:** Italiano / English
 
 ## Requirements
@@ -49,6 +51,8 @@ The diameter is aligned perpendicular to the stem axis when the stem can be reco
 GRvx-Cutter/
 ├── GRvx/
 │   └── GRvx Cutter.py   # Glyphs script (MenuTitle: GRvx Cutter)
+├── docs/
+│   └── preview.jpg
 ├── LICENSE
 └── README.md
 ```
