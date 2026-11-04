@@ -52,5 +52,3 @@ GRvx-Cutter/
 ├── LICENSE
 └── README.md
 ```
-
-Author: Pasquale de Sario · https://pasqualedesario.eu
