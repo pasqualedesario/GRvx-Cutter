@@ -1,6 +1,7 @@
 # GRvx Cutter
 
-Open-source [Glyphs](https://glyphsapp.com) script that cuts a geometric semicircle into a stem (straight or diagonal). Built for type designers; published as a reusable tool and portfolio piece by [Pasquale de Sario](https://pasqualedesario.eu).
+Open-source [Glyphs](https://glyphsapp.com) script that cuts a geometric semicircle into a stem (straight or diagonal).
+
 
 **Version:** 0.1.0 · **License:** MIT · **UI:** Italiano / English
 
@@ -8,6 +9,7 @@ Open-source [Glyphs](https://glyphsapp.com) script that cuts a geometric semicir
 
 - [Glyphs](https://glyphsapp.com) 3 or 4
 - [Vanilla](https://github.com/robotools/vanilla) (for the floating panel; without it the script still runs a default “inside” cut)
+
 
 ## Install
 
@@ -20,6 +22,7 @@ Open-source [Glyphs](https://glyphsapp.com) script that cuts a geometric semicir
 3. In Glyphs: **Script → Reload Scripts** (or restart Glyphs).
 4. Run **Script → GRvx → GRvx Cutter**.
 
+
 ## Usage
 
 1. Open a glyph in Edit View.
@@ -30,6 +33,7 @@ Open-source [Glyphs](https://glyphsapp.com) script that cuts a geometric semicir
 
 The diameter is aligned perpendicular to the stem axis when the stem can be recognized.
 
+
 ## Known limits
 
 - The span between the two nodes must be short (at most 14 intermediate nodes); select the diameter ends, not a long outline arc.
@@ -37,6 +41,7 @@ The diameter is aligned perpendicular to the stem axis when the stem can be reco
 - Very small radii are rejected.
 - Both nodes must belong to the **same** path.
 - Goniometer canvas status strings are currently Italian-only; the panel UI is fully bilingual.
+
 
 ## Development
 
