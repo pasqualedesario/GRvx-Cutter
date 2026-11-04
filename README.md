@@ -5,8 +5,6 @@ Open-source [Glyphs](https://glyphsapp.com) script that cuts a geometric semicir
 
 ![GRvx Cutter panel and goniometer preview in Glyphs](docs/preview.png)
 
-**Version:** 0.1.0 · **License:** MIT · **UI:** Italiano / English
-
 ## Requirements
 
 - [Glyphs](https://glyphsapp.com) 3 or 4
