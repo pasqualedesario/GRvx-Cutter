@@ -7,7 +7,7 @@ Open-source [Glyphs](https://glyphsapp.com) script that cuts a geometric semicir
 
 ## Requirements
 
-- [Glyphs](https://glyphsapp.com) 3 or 4
+- [Glyphs](https://glyphsapp.com) 3/4
 - [Vanilla](https://github.com/robotools/vanilla) (for the floating panel; without it the script still runs a default “inside” cut)
 
 
