@@ -61,7 +61,7 @@ except Exception:
 KAPPA = 4.0 * math.tan(math.pi / 8.0) / 3.0
 MAX_SPAN_NODES = 14
 SCRIPT_TITLE = "GRvx Cutter"
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 # UI layout (SECTION == window margin)
 UI_MARGIN = 18
@@ -161,20 +161,68 @@ def oncurve_neighbor(nodes, idx, step):
 def edge_dir(path, idx, forward=True):
 	a = xy(path.nodes[idx])
 	j = oncurve_neighbor(path.nodes, idx, 1 if forward else -1)
+	if j is None:
+		return (1.0, 0.0)
 	b = xy(path.nodes[j])
 	return unit(V(a, b) if forward else V(b, a))
 
 
-def choose_span(path, i, j):
+def span_oncurve_count(path, span):
+	return sum(1 for k in span if path.nodes[k].type != OFFCURVE)
+
+
+def span_geometry_length(path, start_i, end_i, span):
+	"""Polyline length start → span → end (node centers)."""
+	idxs = [start_i] + list(span) + [end_i]
+	total = 0.0
+	for a, b in zip(idxs, idxs[1:]):
+		total += length(V(xy(path.nodes[a]), xy(path.nodes[b])))
+	return total
+
+
+def span_midpoint(path, start_i, end_i, span):
+	pts = [xy(path.nodes[start_i]), xy(path.nodes[end_i])]
+	for k in span:
+		if path.nodes[k].type != OFFCURVE:
+			pts.append(xy(path.nodes[k]))
+	n = float(len(pts)) or 1.0
+	return (sum(p[0] for p in pts) / n, sum(p[1] for p in pts) / n)
+
+
+def choose_span(path, i, j, prefer_dir=None, origin=None):
+	"""Pick the outline span to replace with the semicircle.
+
+	Ranks by fewer on-curve nodes, then shorter geometry. Optional
+	prefer_dir/origin break ties toward the cut side of the stem.
+	"""
 	n = len(path.nodes)
-	fwd, bwd = walk(i, j, n), walk(j, i, n)
+	candidates = ((i, j, walk(i, j, n)), (j, i, walk(j, i, n)))
 
-	def rank(span):
-		n_off = sum(1 for k in span if path.nodes[k].type == OFFCURVE)
-		short_notch = 0 if (n_off > 0 and len(span) <= MAX_SPAN_NODES) else 1
-		return (short_notch, len(span))
+	def rank(start, end, span):
+		bias = 0.0
+		if prefer_dir is not None and origin is not None:
+			mid = span_midpoint(path, start, end, span)
+			bias = -dot(sub(mid, origin), unit(prefer_dir))
+		return (
+			span_oncurve_count(path, span),
+			span_geometry_length(path, start, end, span),
+			bias,
+			len(span),
+		)
 
-	return (i, j, fwd) if rank(fwd) <= rank(bwd) else (j, i, bwd)
+	return min(candidates, key=lambda c: rank(*c))
+
+
+def path_for_nodes(layer, node_a, node_b):
+	"""Return the path that contains both nodes, or None."""
+	return next(
+		(
+			p
+			for p in layer.paths
+			if node_index(p, node_a) is not None and node_index(p, node_b) is not None
+		),
+		None,
+	)
 
 
 def point_in_path(path, pt):
@@ -259,10 +307,7 @@ def selection_geometry(layer, for_preview=False):
 	if len(sel) != 2:
 		return None, "Seleziona 2 nodi on-curve nel canvas del glifo"
 	na, nb = sel[0], sel[1]
-	path = next(
-		(p for p in layer.paths if node_index(p, na) is not None and node_index(p, nb) is not None),
-		None,
-	)
+	path = path_for_nodes(layer, na, nb)
 	if path is None:
 		return None, "I due nodi devono stare sullo stesso path"
 	i, j = node_index(path, na), node_index(path, nb)
@@ -519,16 +564,16 @@ def semicircle(A, B, side):
 
 
 def rebuild_path(old_nodes, start_i, end_i, between, pts):
-	"""Replace span with semicircle. A/B stay corners; only apex M is smooth."""
+	"""Replace span start→end with semicircle pts. A/B are corners; apex M is smooth."""
 	n = len(old_nodes)
 	remove = set(between)
 	st = make_node(LINE, pts[0], False)
-	if old_nodes[start_i].type == LINE:
-		st.type = LINE
-	elif old_nodes[start_i].type != OFFCURVE:
-		st.type = old_nodes[start_i].type
+	src_start = old_nodes[start_i]
+	if src_start.type != OFFCURVE:
+		st.type = src_start.type
 	st.smooth = False
-	arc = [
+	out = [
+		st,
 		make_node(OFFCURVE, pts[1]),
 		make_node(OFFCURVE, pts[2]),
 		make_node(CURVE, pts[3], True),
@@ -536,15 +581,43 @@ def rebuild_path(old_nodes, start_i, end_i, between, pts):
 		make_node(OFFCURVE, pts[5]),
 		make_node(CURVE, pts[6], False),
 	]
-	out = [st] + arc
 	k, guard = (end_i + 1) % n, 0
 	while k != start_i and guard <= n:
 		guard += 1
 		if k not in remove:
 			src = old_nodes[k]
-			out.append(make_node(src.type, xy(src), src.smooth))
+			out.append(make_node(src.type, xy(src), bool(src.smooth)))
 		k = (k + 1) % n
 	return out
+
+
+def chord_is_across_stem(A, B, s):
+	"""True if A–B is mostly perpendicular to the stem axis (opposite edges)."""
+	chord = V(A, B)
+	along = abs(dot(chord, s))
+	perp = length(sub(chord, mul(s, dot(chord, s))))
+	return perp >= 1.0 and along <= perp * 1.25
+
+
+def diameter_is_valid(A, B, A2, B2, s, width):
+	"""True if aligned diameter still matches stem width and stays ⊥ to the stem."""
+	if length(V(A, A2)) > width * 3 or length(V(B, B2)) > width * 3:
+		return False
+	if abs(length(V(A2, B2)) - width) > max(2.0, width * 0.15):
+		return False
+	if abs(dot(unit(V(A2, B2)), s)) > 0.35:
+		return False
+	return True
+
+
+def semicircle_into(A2, B2, center, into):
+	"""Semicircle A2→B2 whose apex points along `into`. None on failure."""
+	pts = semicircle(A2, B2, +1)
+	if pts is None:
+		return None
+	if dot(sub(pts[3], center), into) < 0:
+		pts = semicircle(A2, B2, -1)
+	return pts
 
 
 # ── i18n ───────────────────────────────────────────────────────────────────
@@ -581,7 +654,6 @@ UI = {
 		"notify": "Taglio · %s",
 		"verso_key_in": "all’interno",
 		"verso_key_out": "all’esterno",
-		"err_same_path": "I due nodi devono appartenere allo stesso path.",
 		"err_long": (
 			"Il tratto tra i due nodi è troppo lungo (%d nodi).\n"
 			"Seleziona i due estremi del diametro del taglio."
@@ -623,7 +695,6 @@ UI = {
 		"notify": "Cut · %s",
 		"verso_key_in": "inside",
 		"verso_key_out": "outside",
-		"err_same_path": "Both nodes must belong to the same path.",
 		"err_long": (
 			"The span between the nodes is too long (%d nodes).\n"
 			"Select the two ends of the cut diameter."
@@ -657,35 +728,52 @@ def open_site(url):
 def apply_cut(path, node_a, node_b, verso="dentro", lang="it"):
 	i, j = node_index(path, node_a), node_index(path, node_b)
 	if i is None or j is None or i == j:
-		return False, t(lang, "err_same_path")
+		return False, t(lang, "same_path")
+
+	# Provisional span → stem → into, then re-rank span toward the cut side.
 	start_i, end_i, between = choose_span(path, i, j)
 	if len(between) > MAX_SPAN_NODES:
 		return False, t(lang, "err_long") % len(between)
 	old = list(path.nodes)
-	A, B = xy(old[start_i]), xy(old[end_i])
 	stem = stem_frame(path, start_i, end_i)
 	if stem is None:
 		return False, t(lang, "err_stem")
 	s, width = stem
 	if width < 1.0 or width > 2000:
 		return False, t(lang, "err_width") % width
-	A2, B2, center = diameter_on_stem(A, B, s, width)
-	if length(V(A, A2)) > width * 3 or length(V(B, B2)) > width * 3:
-		return False, t(lang, "err_align")
+
+	A, B = xy(old[start_i]), xy(old[end_i])
+	_A2, _B2, center = diameter_on_stem(A, B, s, width)
 	into = into_stem(path, center, s, width)
 	if verso == "fuori":
 		into = mul(into, -1.0)
-	pts = semicircle(A2, B2, +1)
+
+	start_i, end_i, between = choose_span(
+		path, i, j, prefer_dir=into, origin=center
+	)
+	if len(between) > MAX_SPAN_NODES:
+		return False, t(lang, "err_long") % len(between)
+
+	A, B = xy(old[start_i]), xy(old[end_i])
+	if not chord_is_across_stem(A, B, s):
+		return False, t(lang, "err_stem")
+
+	A2, B2, center = diameter_on_stem(A, B, s, width)
+	if not diameter_is_valid(A, B, A2, B2, s, width):
+		return False, t(lang, "err_align")
+
+	pts = semicircle_into(A2, B2, center, into)
 	if pts is None:
 		return False, t(lang, "err_radius")
-	if dot(sub(pts[3], center), into) < 0:
-		pts = semicircle(A2, B2, -1)
-		if pts is None:
-			return False, t(lang, "err_radius")
+
 	new_nodes = rebuild_path(old, start_i, end_i, between, pts)
 	if len(new_nodes) < 3:
 		return False, t(lang, "err_rebuild")
 	path.nodes = new_nodes
+	try:
+		path.closed = True
+	except Exception:
+		pass
 	return True, "ok"
 
 
@@ -704,10 +792,7 @@ def run_cutter(verso="dentro", lang="it"):
 		Message(t(lang, "need_two"), SCRIPT_TITLE)
 		return
 	na, nb = sel[0], sel[1]
-	path = next(
-		(p for p in layer.paths if node_index(p, na) is not None and node_index(p, nb) is not None),
-		None,
-	)
+	path = path_for_nodes(layer, na, nb)
 	if path is None:
 		Message(t(lang, "same_path"), SCRIPT_TITLE)
 		return
@@ -777,9 +862,8 @@ def tint_panel_white(window):
 		pass
 
 
-def style_window_title_bold(window, title=SCRIPT_TITLE):
-	# Only set the title string. Do not walk the private titlebar views or
-	# force boldSystemFont — that can clip glyphs (e.g. a cut through the "r").
+def set_window_title(window, title=SCRIPT_TITLE):
+	"""Set the NSWindow title only (no private titlebar font hacks)."""
 	try:
 		window.getNSWindow().setTitle_(title)
 	except Exception:
@@ -858,7 +942,8 @@ def style_checkbox(checkbox):
 		pass
 
 
-def style_credit_line(button, prefix, name, url=None):
+def style_credit_line(button, prefix, name):
+	"""Credit label: plain prefix + green underlined name (opens site via callback)."""
 	full = prefix + name
 	font = _credit_font()
 	base = _text_black()
@@ -985,7 +1070,7 @@ class GRvxCutterDialog(object):
 		self.show_goniometer = True
 		self.w = FloatingWindow((W, H), SCRIPT_TITLE)
 		tint_panel_white(self.w)
-		style_window_title_bold(self.w)
+		set_window_title(self.w)
 		y = m
 
 		self.w.aboutTitle = TextBox((m, y, -m, UI_TITLE_H), "")
@@ -1047,7 +1132,7 @@ class GRvxCutterDialog(object):
 		Glyphs.addCallback(self._ui_update, UPDATEINTERFACE)
 		Glyphs.redraw()
 		self.w.open()
-		style_window_title_bold(self.w)
+		set_window_title(self.w)
 
 	def apply_language(self):
 		L = self.lang
@@ -1084,11 +1169,10 @@ class GRvxCutterDialog(object):
 			self.w.credit,
 			t(L, "credit_prefix"),
 			t(L, "credit_name"),
-			t(L, "site"),
 		)
 		style_lang_chip(self.w.lang, t(L, "lang_button"))
 		tint_panel_white(self.w)
-		style_window_title_bold(self.w)
+		set_window_title(self.w)
 
 	def open_credit_(self, sender):
 		open_site(t(self.lang, "site"))

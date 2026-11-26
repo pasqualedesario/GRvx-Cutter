@@ -37,7 +37,7 @@ The diameter is aligned perpendicular to the stem axis when the stem can be reco
 ## Known limits
 
 - The span between the two nodes must be short (at most 14 intermediate nodes); select the diameter ends, not a long outline arc.
-- Stem detection needs roughly parallel edges at the two nodes; unusual junctions may fail with “stem not recognized”.
+- Stem detection needs roughly parallel edges at the two nodes; nodes on the **same** edge are rejected.
 - Very small radii are rejected.
 - Both nodes must belong to the **same** path.
 - Goniometer canvas status strings are currently Italian-only; the panel UI is fully bilingual.
@@ -51,6 +51,8 @@ GRvx-Cutter/
 │   └── GRvx Cutter.py   # Glyphs script (MenuTitle: GRvx Cutter)
 ├── docs/
 │   └── preview.png
+├── tests/
+│   └── test_choose_span.py
 ├── LICENSE
 └── README.md
 ```
