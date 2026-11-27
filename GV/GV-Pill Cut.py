@@ -6,8 +6,15 @@ Select two on-curve nodes → goniometer preview → cut inside or outside the s
 """
 
 import math
+import os
+import sys
 import traceback
-import webbrowser
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+	sys.path.insert(0, _HERE)
+
+import gv_common as gvc
 
 try:
 	from GlyphsApp import (
@@ -26,9 +33,11 @@ except Exception:
 	UPDATEINTERFACE = globals().get("UPDATEINTERFACE", "GSUpdateInterface")
 
 try:
-	from GlyphsApp import NodeSmoothColor
+	from GlyphsApp import NodeSmoothColor as _NodeSmoothColor
+	gvc.NodeSmoothColor = _NodeSmoothColor
 except Exception:
-	NodeSmoothColor = None
+	pass
+gvc.Glyphs = Glyphs
 
 try:
 	from vanilla import FloatingWindow, RadioGroup, Button, TextBox, CheckBox
@@ -37,126 +46,39 @@ except Exception:
 	HAS_VANILLA = False
 
 try:
-	from AppKit import (
-		NSFont,
-		NSPoint,
-		NSColor,
-		NSBezierPath,
-		NSMakeRect,
-		NSFontAttributeName,
-		NSForegroundColorAttributeName,
-		NSUnderlineStyleAttributeName,
-		NSUnderlineStyleSingle,
-		NSWorkspace,
-		NSURL,
-	)
-	from Foundation import NSString, NSMutableAttributedString, NSAttributedString
+	from AppKit import NSPoint, NSBezierPath, NSMakeRect, NSFontAttributeName
+	from Foundation import NSString
 except Exception:
-	NSFont = NSPoint = NSColor = NSBezierPath = None
-	NSMakeRect = NSFontAttributeName = NSForegroundColorAttributeName = None
-	NSUnderlineStyleAttributeName = NSUnderlineStyleSingle = None
-	NSWorkspace = NSURL = None
-	NSString = NSMutableAttributedString = NSAttributedString = None
+	NSPoint = NSBezierPath = NSMakeRect = NSFontAttributeName = None
+	NSString = None
 
 KAPPA = 4.0 * math.tan(math.pi / 8.0) / 3.0
 MAX_SPAN_NODES = 14
 SCRIPT_TITLE = "GV-Pill Cut"
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
-# UI layout (SECTION == window margin)
-UI_MARGIN = 18
-UI_SECTION = UI_MARGIN
-UI_INNER = 2
-UI_BTN_GAP = 20
-UI_WIDTH = 340
-UI_FONT_SIZE = 13.0
-CREDIT_FONT_SIZE = 10.0
-UI_TITLE_H = 20
-UI_ABOUT_H = 52
-UI_INSTR_BODY_H = 52
 UI_VERSO_H = 20
 UI_RADIO_H = 48
-UI_CHECK_H = 24
-UI_BTN_H = 28
-UI_CREDIT_H = 20
-UI_LANG_W = 96
-NS_BEZEL_RECESSED = 13
-NS_CONTROL_SIZE_SMALL = 1
 
-
-# ── math ───────────────────────────────────────────────────────────────────
-
-def V(a, b):
-	return (b[0] - a[0], b[1] - a[1])
-
-
-def add(a, b):
-	return (a[0] + b[0], a[1] + b[1])
-
-
-def sub(a, b):
-	return (a[0] - b[0], a[1] - b[1])
-
-
-def mul(a, s):
-	return (a[0] * s, a[1] * s)
-
-
-def dot(a, b):
-	return a[0] * b[0] + a[1] * b[1]
-
-
-def length(a):
-	return math.hypot(a[0], a[1])
-
-
-def unit(a):
-	L = length(a)
-	return (1.0, 0.0) if L < 1e-12 else (a[0] / L, a[1] / L)
-
-
-def rot90(a, sign=1.0):
-	return (-a[1] * sign, a[0] * sign)
-
-
-def xy(n):
-	return (float(n.x), float(n.y))
-
-
-def project(P, origin, direction):
-	d = unit(direction)
-	return add(origin, mul(d, dot(sub(P, origin), d)))
-
-
-# ── path helpers ───────────────────────────────────────────────────────────
-
-def node_index(path, node):
-	for i, n in enumerate(path.nodes):
-		if n is node:
-			return i
-	for i, n in enumerate(path.nodes):
-		if n.type == node.type and abs(n.x - node.x) < 1e-6 and abs(n.y - node.y) < 1e-6:
-			return i
-	return None
-
-
-def walk(i, j, n):
-	out, k = [], (i + 1) % n
-	while k != j and len(out) <= n:
-		out.append(k)
-		k = (k + 1) % n
-	return out
+V = gvc.V
+add = gvc.add
+sub = gvc.sub
+mul = gvc.mul
+dot = gvc.dot
+length = gvc.length
+unit = gvc.unit
+rot90 = gvc.rot90
+xy = gvc.xy
+project = gvc.project
+node_index = gvc.node_index
+walk = gvc.walk_indices
 
 
 def oncurve_neighbor(nodes, idx, step):
-	n = len(nodes)
-	k = (idx + step) % n
-	for _ in range(n):
-		if nodes[k].type != OFFCURVE:
-			return k
-		k = (k + step) % n
-	return None
+	return gvc.oncurve_neighbor(nodes, idx, step, OFFCURVE)
 
+
+# ── path helpers ───────────────────────────────────────────────────────────
 
 def edge_dir(path, idx, forward=True):
 	a = xy(path.nodes[idx])
@@ -369,68 +291,6 @@ def selection_geometry(layer, for_preview=False):
 	}, status
 
 
-def _color_rgba(r, g, b, a):
-	if NSColor is None:
-		return None
-	try:
-		return NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, a)
-	except Exception:
-		return None
-
-
-def _glyphs_green(alpha=1.0):
-	color = NodeSmoothColor
-	if color is None:
-		try:
-			color = Glyphs.colorObjectToNSColor("GREEN")
-		except Exception:
-			color = None
-	if color is None:
-		color = _color_rgba(0.2, 0.75, 0.25, 1.0)
-	if color is None:
-		return None
-	try:
-		return color.colorWithAlphaComponent_(float(alpha))
-	except Exception:
-		return color
-
-
-def _draw_label(text, pt, scale, color, offset=(0.0, 0.0), bold=False):
-	if NSString is None or NSFont is None or color is None:
-		return
-	size = max(10.0, 11.0 / max(scale, 0.01))
-	font = NSFont.boldSystemFontOfSize_(size) if bold else NSFont.systemFontOfSize_(size)
-	attrs = {
-		NSFontAttributeName: font,
-		NSForegroundColorAttributeName: color,
-	}
-	NSString.stringWithString_(text).drawAtPoint_withAttributes_(
-		(pt[0] + offset[0] / scale, pt[1] + offset[1] / scale),
-		attrs,
-	)
-
-
-def _mark(pt, scale, color, radius_px=3.5):
-	if NSBezierPath is None or NSMakeRect is None or color is None:
-		return
-	rr = radius_px / max(scale, 0.01)
-	color.set()
-	NSBezierPath.bezierPathWithOvalInRect_(
-		NSMakeRect(pt[0] - rr, pt[1] - rr, rr * 2, rr * 2)
-	).fill()
-
-
-def _scale_from_info(info):
-	if isinstance(info, dict):
-		for key in ("Scale", "scale", "ScaleFactor"):
-			if key in info:
-				try:
-					return float(info[key])
-				except Exception:
-					pass
-	return 1.0
-
-
 def _normalize_inclination(angle_deg):
 	a = float(angle_deg) % 180.0
 	if a > 90.0:
@@ -454,12 +314,12 @@ def _draw_readout_block(C, r, scale, color, radius, diameter, angle_deg):
 		_fmt_dec(incl, 1),
 	)
 	anchor = (C[0], C[1] - r - 16.0 / max(scale, 0.01))
-	if NSString is not None and NSFont is not None:
+	if NSString is not None and gvc.NSFont is not None:
 		size = max(10.0, 11.0 / max(scale, 0.01))
-		attrs = {NSFontAttributeName: NSFont.systemFontOfSize_(size)}
+		attrs = {NSFontAttributeName: gvc.NSFont.systemFontOfSize_(size)}
 		tw = float(NSString.stringWithString_(line).sizeWithAttributes_(attrs).width)
 		anchor = (C[0] - tw * 0.5, anchor[1])
-	_draw_label(line, anchor, scale, color)
+	gvc.draw_label(line, anchor, scale, color)
 
 
 def draw_goniometer(layer, info):
@@ -469,9 +329,9 @@ def draw_goniometer(layer, info):
 		geo, _status = selection_geometry(layer, for_preview=True)
 		if geo is None:
 			return
-		scale = _scale_from_info(info)
-		fill = _glyphs_green(0.25)
-		green = _glyphs_green(1.0)
+		scale = gvc.scale_from_info(info)
+		fill = gvc.glyphs_green(0.25)
+		green = gvc.glyphs_green(1.0)
 		if fill is None or green is None:
 			return
 
@@ -512,11 +372,11 @@ def draw_goniometer(layer, info):
 		rad.stroke()
 
 		for pt in (L, R, Sup, Inf):
-			_mark(pt, scale, green, 3.0)
-		_mark(C, scale, green, 2.2)
+			gvc.mark_point(pt, scale, green, 3.0)
+		gvc.mark_point(C, scale, green, 2.2)
 		_draw_readout_block(C, r, scale, green, r, geo["diameter"], geo["angle_deg"])
 	except Exception:
-		print(traceback.format_exc())
+		traceback.print_exc()
 
 
 # ── cut ────────────────────────────────────────────────────────────────────
@@ -640,7 +500,7 @@ UI = {
 		"goniometer": "Goniometro",
 		"apply": "Applica",
 		"cancel": "Annulla",
-		"credit_prefix": "Development: ",
+		"credit_prefix": "Sviluppo: ",
 		"credit_name": "Pasquale de Sario",
 		"site": "https://pasqualedesario.eu/#it",
 		"lang_button": "English",
@@ -709,20 +569,7 @@ UI = {
 
 
 def t(lang, key):
-	return UI.get(lang, UI["it"]).get(key, UI["it"].get(key, key))
-
-
-def open_site(url):
-	try:
-		if NSWorkspace is not None and NSURL is not None:
-			NSWorkspace.sharedWorkspace().openURL_(NSURL.URLWithString_(url))
-			return
-	except Exception:
-		pass
-	try:
-		webbrowser.open(url)
-	except Exception:
-		pass
+	return gvc.t(UI, lang, key)
 
 
 def apply_cut(path, node_a, node_b, verso="dentro", lang="it"):
@@ -796,11 +643,23 @@ def run_cutter(verso="dentro", lang="it"):
 	if path is None:
 		Message(t(lang, "same_path"), SCRIPT_TITLE)
 		return
+
+	glyph = getattr(layer, "parent", None)
 	font.disableUpdateInterface()
 	ok, msg = False, ""
 	try:
+		if glyph is not None:
+			try:
+				glyph.beginUndo()
+			except Exception:
+				pass
 		ok, msg = apply_cut(path, na, nb, verso=verso, lang=lang)
 		layer.selection = []
+		if glyph is not None:
+			try:
+				glyph.endUndo()
+			except Exception:
+				pass
 	finally:
 		font.enableUpdateInterface()
 	if ok:
@@ -811,320 +670,81 @@ def run_cutter(verso="dentro", lang="it"):
 		Message(msg, SCRIPT_TITLE)
 
 
-# ── UI helpers ─────────────────────────────────────────────────────────────
-
-def _ui_font(bold=False):
-	if not NSFont:
-		return None
-	if bold:
-		return NSFont.boldSystemFontOfSize_(UI_FONT_SIZE)
-	return NSFont.systemFontOfSize_(UI_FONT_SIZE)
-
-
-def _credit_font():
-	return NSFont.systemFontOfSize_(CREDIT_FONT_SIZE) if NSFont else None
-
-
-def _text_black():
-	if NSColor is None:
-		return None
-	try:
-		return NSColor.blackColor()
-	except Exception:
-		return None
-
-
-def _measure_text(text, font):
-	if NSString is None or font is None:
-		return float(len(text) * 6)
-	attrs = {NSFontAttributeName: font}
-	return float(NSString.stringWithString_(text).sizeWithAttributes_(attrs).width)
-
-
-def tint_panel_white(window):
-	if NSColor is None:
-		return
-	try:
-		white = NSColor.whiteColor()
-	except Exception:
-		return
-	try:
-		view = window.getNSView()
-		view.setWantsLayer_(True)
-		view.layer().setBackgroundColor_(white.CGColor())
-	except Exception:
-		pass
-	try:
-		nsw = window.getNSWindow()
-		nsw.setBackgroundColor_(white)
-		nsw.setOpaque_(True)
-	except Exception:
-		pass
-
-
-def set_window_title(window, title=SCRIPT_TITLE):
-	"""Set the NSWindow title only (no private titlebar font hacks)."""
-	try:
-		window.getNSWindow().setTitle_(title)
-	except Exception:
-		pass
-
-
-def style_heading(box):
-	try:
-		field = box.getNSTextField()
-		font = _ui_font(bold=True)
-		if font:
-			field.setFont_(font)
-		black = _text_black()
-		if black is not None:
-			field.setTextColor_(black)
-		field.setDrawsBackground_(False)
-	except Exception:
-		pass
-
-
-def style_body(box):
-	try:
-		field = box.getNSTextField()
-		font = _ui_font(bold=False)
-		if font:
-			field.setFont_(font)
-		black = _text_black()
-		if black is not None:
-			field.setTextColor_(black)
-		field.setSelectable_(False)
-		field.setDrawsBackground_(False)
-	except Exception:
-		pass
-
-
-def style_radio(radio):
-	try:
-		matrix = radio.getNSMatrix()
-		font = _ui_font(bold=False)
-		black = _text_black()
-		if font:
-			matrix.setFont_(font)
-		for row in range(matrix.numberOfRows()):
-			for col in range(matrix.numberOfColumns()):
-				cell = matrix.cellAtRow_column_(row, col)
-				if cell is None:
-					continue
-				if font:
-					cell.setFont_(font)
-				if black is not None:
-					try:
-						cell.setTextColor_(black)
-					except Exception:
-						pass
-	except Exception:
-		pass
-
-
-def style_checkbox(checkbox):
-	try:
-		ns = checkbox.getNSButton()
-		font = _ui_font(bold=False)
-		black = _text_black()
-		title = ns.title() or ""
-		attrs = {}
-		if font is not None:
-			attrs[NSFontAttributeName] = font
-			ns.setFont_(font)
-		if black is not None and NSForegroundColorAttributeName:
-			attrs[NSForegroundColorAttributeName] = black
-		if attrs and NSAttributedString is not None:
-			ns.setAttributedTitle_(
-				NSAttributedString.alloc().initWithString_attributes_(title, attrs)
-			)
-	except Exception:
-		pass
-
-
-def style_credit_line(button, prefix, name):
-	"""Credit label: plain prefix + green underlined name (opens site via callback)."""
-	full = prefix + name
-	font = _credit_font()
-	base = _text_black()
-	link_color = _glyphs_green(1.0) or base
-	try:
-		ns = button.getNSButton()
-		ns.setBordered_(False)
-		ns.setButtonType_(0)
-		try:
-			ns.setAlignment_(0)
-		except Exception:
-			pass
-		if NSMutableAttributedString is None:
-			ns.setTitle_(full)
-			if font:
-				ns.setFont_(font)
-			return
-		attr = NSMutableAttributedString.alloc().initWithString_(full)
-		base_attrs = {}
-		if font is not None:
-			base_attrs[NSFontAttributeName] = font
-		if base is not None and NSForegroundColorAttributeName:
-			base_attrs[NSForegroundColorAttributeName] = base
-		if base_attrs:
-			attr.addAttributes_range_(base_attrs, (0, len(full)))
-		link_attrs = {}
-		if font is not None:
-			link_attrs[NSFontAttributeName] = font
-		if link_color is not None and NSForegroundColorAttributeName:
-			link_attrs[NSForegroundColorAttributeName] = link_color
-		if NSUnderlineStyleAttributeName is not None and NSUnderlineStyleSingle is not None:
-			link_attrs[NSUnderlineStyleAttributeName] = NSUnderlineStyleSingle
-		if link_attrs and name:
-			attr.addAttributes_range_(link_attrs, (len(prefix), len(name)))
-		ns.setAttributedTitle_(attr)
-		try:
-			x, y, _ow, h = button.getPosSize()
-			button.setPosSize((x, y, max(_measure_text(full, font) + 12.0, 80.0), h))
-		except Exception:
-			pass
-	except Exception:
-		pass
-
-
-def style_lang_chip(button, title=None):
-	try:
-		ns = button.getNSButton()
-		ns.setTitle_(title if title is not None else (ns.title() or ""))
-		ns.setBezelStyle_(NS_BEZEL_RECESSED)
-		try:
-			ns.setControlSize_(NS_CONTROL_SIZE_SMALL)
-		except Exception:
-			pass
-		font = _credit_font()
-		if font:
-			ns.setFont_(font)
-		try:
-			ns.setWantsLayer_(True)
-			layer = ns.layer()
-			if layer is not None:
-				layer.setCornerRadius_(8.0)
-				layer.setMasksToBounds_(True)
-		except Exception:
-			pass
-	except Exception:
-		pass
-
-
-def style_action_button(button, default=False, green_fill=False):
-	try:
-		ns = button.getNSButton()
-		if default:
-			ns.setKeyEquivalent_("\r")
-		font = _ui_font(bold=False)
-		black = _text_black()
-		title = ns.title() or ""
-		if green_fill:
-			soft = _glyphs_green(0.25)
-			if soft is not None:
-				try:
-					ns.setBezelColor_(soft)
-				except Exception:
-					pass
-		else:
-			try:
-				ns.setBezelColor_(None)
-			except Exception:
-				pass
-			try:
-				ns.setContentTintColor_(None)
-			except Exception:
-				pass
-		attrs = {}
-		if font is not None:
-			attrs[NSFontAttributeName] = font
-			ns.setFont_(font)
-		if black is not None and NSForegroundColorAttributeName:
-			attrs[NSForegroundColorAttributeName] = black
-		if attrs and title and NSAttributedString is not None:
-			ns.setAttributedTitle_(
-				NSAttributedString.alloc().initWithString_attributes_(title, attrs)
-			)
-	except Exception:
-		pass
-
-
 # ── dialog ─────────────────────────────────────────────────────────────────
 
 class GVPillCutDialog(object):
 	def __init__(self):
-		m, s, inn, W = UI_MARGIN, UI_SECTION, UI_INNER, UI_WIDTH
+		m, s, inn, W = gvc.UI_MARGIN, gvc.UI_SECTION, gvc.UI_INNER, gvc.UI_WIDTH
 		H = (
 			m
-			+ UI_TITLE_H + inn + UI_ABOUT_H + s
-			+ UI_TITLE_H + inn + UI_INSTR_BODY_H + s
+			+ gvc.UI_TITLE_H + inn + gvc.UI_ABOUT_H + s
+			+ gvc.UI_TITLE_H + inn + gvc.UI_INSTR_BODY_H + s
 			+ UI_VERSO_H + inn + UI_RADIO_H + s
-			+ UI_CHECK_H + s
-			+ UI_BTN_H + s
-			+ UI_CREDIT_H
+			+ gvc.UI_CHECK_H + s
+			+ gvc.UI_BTN_H + s
+			+ gvc.UI_CREDIT_H
 			+ m
 		)
 
 		self.lang = "it"
 		self.show_goniometer = True
 		self.w = FloatingWindow((W, H), SCRIPT_TITLE)
-		tint_panel_white(self.w)
-		set_window_title(self.w)
+		gvc.tint_panel_white(self.w)
+		gvc.set_window_title(self.w, SCRIPT_TITLE)
 		y = m
 
-		self.w.aboutTitle = TextBox((m, y, -m, UI_TITLE_H), "")
-		style_heading(self.w.aboutTitle)
-		y += UI_TITLE_H + inn
-		self.w.aboutBody = TextBox((m, y, -m, UI_ABOUT_H), "")
-		style_body(self.w.aboutBody)
-		y += UI_ABOUT_H + s
+		self.w.aboutTitle = TextBox((m, y, -m, gvc.UI_TITLE_H), "")
+		gvc.style_heading(self.w.aboutTitle)
+		y += gvc.UI_TITLE_H + inn
+		self.w.aboutBody = TextBox((m, y, -m, gvc.UI_ABOUT_H), "")
+		gvc.style_body(self.w.aboutBody)
+		y += gvc.UI_ABOUT_H + s
 
-		self.w.instrTitle = TextBox((m, y, -m, UI_TITLE_H), "")
-		style_heading(self.w.instrTitle)
-		y += UI_TITLE_H + inn
-		self.w.instrBody = TextBox((m, y, -m, UI_INSTR_BODY_H), "")
-		style_body(self.w.instrBody)
-		y += UI_INSTR_BODY_H + s
+		self.w.instrTitle = TextBox((m, y, -m, gvc.UI_TITLE_H), "")
+		gvc.style_heading(self.w.instrTitle)
+		y += gvc.UI_TITLE_H + inn
+		self.w.instrBody = TextBox((m, y, -m, gvc.UI_INSTR_BODY_H), "")
+		gvc.style_body(self.w.instrBody)
+		y += gvc.UI_INSTR_BODY_H + s
 
 		self.w.versoLabel = TextBox((m, y, -m, UI_VERSO_H), "")
-		style_heading(self.w.versoLabel)
+		gvc.style_heading(self.w.versoLabel)
 		y += UI_VERSO_H + inn
 		self.w.verso = RadioGroup(
 			(m, y, -m, UI_RADIO_H),
 			[t("it", "verso_in"), t("it", "verso_out")],
 		)
 		self.w.verso.set(0)
-		style_radio(self.w.verso)
+		gvc.style_radio(self.w.verso)
 		y += UI_RADIO_H + s
 
 		self.w.goniometer = CheckBox(
-			(m, y, -m, UI_CHECK_H),
+			(m, y, -m, gvc.UI_CHECK_H),
 			t("it", "goniometer"),
 			value=True,
 			callback=self.toggle_goniometer_,
 		)
-		style_checkbox(self.w.goniometer)
-		y += UI_CHECK_H + s
+		gvc.style_checkbox(self.w.goniometer)
+		y += gvc.UI_CHECK_H + s
 
-		bw = (W - m * 2 - UI_BTN_GAP) / 2.0
-		self.w.run = Button((m, y, bw, UI_BTN_H), "", callback=self.apply_)
-		self.w.cancel = Button((m + bw + UI_BTN_GAP, y, bw, UI_BTN_H), "", callback=self.cancel_)
-		style_action_button(self.w.run, default=True, green_fill=True)
-		style_action_button(self.w.cancel)
-		y += UI_BTN_H + s
+		bw = (W - m * 2 - gvc.UI_BTN_GAP) / 2.0
+		self.w.run = Button((m, y, bw, gvc.UI_BTN_H), "", callback=self.apply_)
+		self.w.cancel = Button((m + bw + gvc.UI_BTN_GAP, y, bw, gvc.UI_BTN_H), "", callback=self.cancel_)
+		gvc.style_action_button(self.w.run, default=True, green_fill=True)
+		gvc.style_action_button(self.w.cancel)
+		y += gvc.UI_BTN_H + s
 
 		self.w.credit = Button(
-			(m, y, W - m * 2 - UI_LANG_W - 8, UI_CREDIT_H),
+			(m, y, W - m * 2 - gvc.UI_LANG_W - 8, gvc.UI_CREDIT_H),
 			"",
 			callback=self.open_credit_,
 		)
 		self.w.lang = Button(
-			(W - m - UI_LANG_W, y, UI_LANG_W, UI_CREDIT_H),
+			(W - m - gvc.UI_LANG_W, y, gvc.UI_LANG_W, gvc.UI_CREDIT_H),
 			"",
 			callback=self.toggle_lang_,
 		)
-		style_lang_chip(self.w.lang)
+		gvc.style_lang_chip(self.w.lang)
 
 		self.apply_language()
 		self.w.bind("close", self._on_close)
@@ -1132,27 +752,27 @@ class GVPillCutDialog(object):
 		Glyphs.addCallback(self._ui_update, UPDATEINTERFACE)
 		Glyphs.redraw()
 		self.w.open()
-		set_window_title(self.w)
+		gvc.set_window_title(self.w, SCRIPT_TITLE)
 
 	def apply_language(self):
 		L = self.lang
 		self.w.aboutTitle.set(t(L, "about_title"))
-		style_heading(self.w.aboutTitle)
+		gvc.style_heading(self.w.aboutTitle)
 		self.w.aboutBody.set(t(L, "about_body"))
-		style_body(self.w.aboutBody)
+		gvc.style_body(self.w.aboutBody)
 		self.w.instrTitle.set(t(L, "instructions"))
-		style_heading(self.w.instrTitle)
+		gvc.style_heading(self.w.instrTitle)
 		self.w.instrBody.set(t(L, "body"))
-		style_body(self.w.instrBody)
+		gvc.style_body(self.w.instrBody)
 		self.w.versoLabel.set(t(L, "verso"))
-		style_heading(self.w.versoLabel)
+		gvc.style_heading(self.w.versoLabel)
 		try:
 			matrix = self.w.verso.getNSMatrix()
 			matrix.cellAtRow_column_(0, 0).setTitle_(t(L, "verso_in"))
 			matrix.cellAtRow_column_(1, 0).setTitle_(t(L, "verso_out"))
 		except Exception:
 			pass
-		style_radio(self.w.verso)
+		gvc.style_radio(self.w.verso)
 		try:
 			self.w.goniometer.setTitle(t(L, "goniometer"))
 		except Exception:
@@ -1160,22 +780,22 @@ class GVPillCutDialog(object):
 				self.w.goniometer.getNSButton().setTitle_(t(L, "goniometer"))
 			except Exception:
 				pass
-		style_checkbox(self.w.goniometer)
+		gvc.style_checkbox(self.w.goniometer)
 		self.w.run.setTitle(t(L, "apply"))
 		self.w.cancel.setTitle(t(L, "cancel"))
-		style_action_button(self.w.run, default=True, green_fill=True)
-		style_action_button(self.w.cancel)
-		style_credit_line(
+		gvc.style_action_button(self.w.run, default=True, green_fill=True)
+		gvc.style_action_button(self.w.cancel)
+		gvc.style_credit_line(
 			self.w.credit,
 			t(L, "credit_prefix"),
 			t(L, "credit_name"),
 		)
-		style_lang_chip(self.w.lang, t(L, "lang_button"))
-		tint_panel_white(self.w)
-		set_window_title(self.w)
+		gvc.style_lang_chip(self.w.lang, t(L, "lang_button"))
+		gvc.tint_panel_white(self.w)
+		gvc.set_window_title(self.w, SCRIPT_TITLE)
 
 	def open_credit_(self, sender):
-		open_site(t(self.lang, "site"))
+		gvc.open_site(t(self.lang, "site"))
 
 	def toggle_lang_(self, sender):
 		self.lang = "en" if self.lang == "it" else "it"
@@ -1207,17 +827,10 @@ class GVPillCutDialog(object):
 		self.w.close()
 
 	def _remove_callbacks(self):
-		for fn, hook in (
+		gvc.remove_glyphs_callbacks((
 			(self._draw, DRAWFOREGROUND),
 			(self._ui_update, UPDATEINTERFACE),
-		):
-			try:
-				Glyphs.removeCallback(fn, hook)
-			except Exception:
-				try:
-					Glyphs.removeCallback(fn)
-				except Exception:
-					pass
+		))
 
 	def _on_close(self, sender):
 		self._remove_callbacks()

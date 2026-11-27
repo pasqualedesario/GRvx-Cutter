@@ -7,15 +7,19 @@ May slide the junction along the straight when that preserves the curve better.
 """
 
 import math
+import os
+import sys
 import traceback
-import webbrowser
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+	sys.path.insert(0, _HERE)
+
+import gv_common as gvc
 
 try:
 	from GlyphsApp import (
 		Glyphs,
-		GSNode,
-		CURVE,
-		LINE,
 		OFFCURVE,
 		Message,
 		DRAWFOREGROUND,
@@ -27,9 +31,11 @@ except Exception:
 	UPDATEINTERFACE = globals().get("UPDATEINTERFACE", "GSUpdateInterface")
 
 try:
-	from GlyphsApp import NodeSmoothColor
+	from GlyphsApp import NodeSmoothColor as _NodeSmoothColor
+	gvc.NodeSmoothColor = _NodeSmoothColor
 except Exception:
-	NodeSmoothColor = None
+	pass
+gvc.Glyphs = Glyphs
 
 try:
 	from vanilla import FloatingWindow, Button, TextBox, CheckBox
@@ -38,28 +44,12 @@ except Exception:
 	HAS_VANILLA = False
 
 try:
-	from AppKit import (
-		NSFont,
-		NSColor,
-		NSBezierPath,
-		NSMakeRect,
-		NSFontAttributeName,
-		NSForegroundColorAttributeName,
-		NSUnderlineStyleAttributeName,
-		NSUnderlineStyleSingle,
-		NSWorkspace,
-		NSURL,
-	)
-	from Foundation import NSString, NSMutableAttributedString, NSAttributedString
+	from AppKit import NSBezierPath
 except Exception:
-	NSFont = NSColor = NSBezierPath = None
-	NSMakeRect = NSFontAttributeName = NSForegroundColorAttributeName = None
-	NSUnderlineStyleAttributeName = NSUnderlineStyleSingle = None
-	NSWorkspace = NSURL = None
-	NSString = NSMutableAttributedString = NSAttributedString = None
+	NSBezierPath = None
 
 SCRIPT_TITLE = "GV-Soft Landing"
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 # Auto soft-land: prefer junction slide + tiny handle edit over heavy flatten.
 MAX_P1_BLEND = 0.28
@@ -73,103 +63,28 @@ W_SOFT = 0.55
 SLIDE_STEPS = 17
 SOFT_CANDIDATES = (0.0, 0.08, 0.16, 0.28)
 
-# UI layout (SECTION == window margin)
-UI_MARGIN = 18
-UI_SECTION = UI_MARGIN
-UI_INNER = 2
-UI_BTN_GAP = 20
-UI_WIDTH = 340
-UI_FONT_SIZE = 13.0
-CREDIT_FONT_SIZE = 10.0
-UI_TITLE_H = 20
-UI_ABOUT_H = 52
-UI_INSTR_BODY_H = 52
-UI_CHECK_H = 24
-UI_BTN_H = 28
-UI_CREDIT_H = 20
 UI_STATUS_H = 36
-UI_LANG_W = 96
-NS_BEZEL_RECESSED = 13
-NS_CONTROL_SIZE_SMALL = 1
 
-
-# ── math ───────────────────────────────────────────────────────────────────
-
-def V(a, b):
-	return (b[0] - a[0], b[1] - a[1])
-
-
-def add(a, b):
-	return (a[0] + b[0], a[1] + b[1])
-
-
-def sub(a, b):
-	return (a[0] - b[0], a[1] - b[1])
-
-
-def mul(a, s):
-	return (a[0] * s, a[1] * s)
-
-
-def lerp(a, b, t):
-	return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
-
-
-def dot(a, b):
-	return a[0] * b[0] + a[1] * b[1]
-
-
-def length(a):
-	return math.hypot(a[0], a[1])
-
-
-def unit(a):
-	L = length(a)
-	return (1.0, 0.0) if L < 1e-12 else (a[0] / L, a[1] / L)
-
-
-def xy(n):
-	return (float(n.x), float(n.y))
-
-
-def project(P, origin, direction):
-	d = unit(direction)
-	return add(origin, mul(d, dot(sub(P, origin), d)))
-
-
-def clamp(v, lo, hi):
-	return max(lo, min(hi, v))
-
-
-# ── path helpers ───────────────────────────────────────────────────────────
-
-def node_index(path, node):
-	for i, n in enumerate(path.nodes):
-		if n is node:
-			return i
-	for i, n in enumerate(path.nodes):
-		if n.type == node.type and abs(n.x - node.x) < 1e-6 and abs(n.y - node.y) < 1e-6:
-			return i
-	return None
+V = gvc.V
+add = gvc.add
+sub = gvc.sub
+mul = gvc.mul
+lerp = gvc.lerp
+dot = gvc.dot
+length = gvc.length
+unit = gvc.unit
+xy = gvc.xy
+project = gvc.project
+clamp = gvc.clamp
+node_index = gvc.node_index
+walk_indices = gvc.walk_indices
 
 
 def oncurve_neighbor(nodes, idx, step):
-	n = len(nodes)
-	k = (idx + step) % n
-	for _ in range(n):
-		if nodes[k].type != OFFCURVE:
-			return k
-		k = (k + step) % n
-	return None
+	return gvc.oncurve_neighbor(nodes, idx, step, OFFCURVE)
 
 
-def walk_indices(i, j, n):
-	out, k = [], (i + 1) % n
-	while k != j and len(out) <= n:
-		out.append(k)
-		k = (k + 1) % n
-	return out
-
+# ── path helpers ───────────────────────────────────────────────────────────
 
 def segment_kind(path, i_on, j_on):
 	"""LINE | CURVE | None between two on-curve indices (forward i→j)."""
@@ -289,7 +204,7 @@ def _handles_line_then_cubic(J, P1, P2, far, L, soft):
 	return prop_P1, prop_P2, line_axis, s
 
 
-def _slide_range(J, L, P0, chord):
+def _slide_range(J, L, chord):
 	"""Signed slide along line_axis=unit(J→L): + toward L, − toward curve."""
 	line_len = length(V(J, L))
 	# Keep a usable straight and a usable cubic span.
@@ -298,19 +213,29 @@ def _slide_range(J, L, P0, chord):
 	return -max_toward_curve, max_toward_L
 
 
+def _auto_result(prop_P1, prop_P2, prop_J, axis, soft, slide, kappa, dev):
+	return {
+		"prop_P1": prop_P1,
+		"prop_P2": prop_P2,
+		"prop_J": prop_J,
+		"line_axis": axis,
+		"soft": soft,
+		"slide": slide,
+		"kappa": kappa,
+		"dev": dev,
+	}
+
+
 def _auto_cubic_then_line(P0, P1, P2, J, L):
 	"""Minimal soft + optional junction slide along the straight."""
 	orig_samples = sample_cubic(P0, P1, P2, J)
 	chord0 = max(length(V(P0, J)), 1.0)
 	line_axis = unit(V(J, L))
-	t_lo, t_hi = _slide_range(J, L, P0, chord0)
+	t_lo, t_hi = _slide_range(J, L, chord0)
 	best = None
 
 	for i in range(SLIDE_STEPS):
-		if SLIDE_STEPS == 1:
-			slide = 0.0
-		else:
-			slide = t_lo + (t_hi - t_lo) * (i / float(SLIDE_STEPS - 1))
+		slide = 0.0 if SLIDE_STEPS == 1 else t_lo + (t_hi - t_lo) * (i / float(SLIDE_STEPS - 1))
 		J2 = add(J, mul(line_axis, slide))
 		# Don't collapse the straight.
 		if length(V(J2, L)) < 8.0:
@@ -327,16 +252,7 @@ def _auto_cubic_then_line(P0, P1, P2, J, L):
 			)
 			# Prefer solutions that already meet κ target; among them minimize cost.
 			rank = (0 if kappa <= KAPPA_OK else 1, cost, abs(slide), s)
-			cand = {
-				"prop_P1": prop_P1,
-				"prop_P2": prop_P2,
-				"prop_J": J2,
-				"line_axis": axis,
-				"soft": s,
-				"slide": slide,
-				"kappa": kappa,
-				"dev": dev,
-			}
+			cand = _auto_result(prop_P1, prop_P2, J2, axis, s, slide, kappa, dev)
 			if best is None or rank < best[0]:
 				best = (rank, cand)
 
@@ -347,7 +263,7 @@ def _auto_line_then_cubic(J, P1, P2, far, L):
 	orig_samples = sample_cubic(J, P1, P2, far)
 	chord0 = max(length(V(J, far)), 1.0)
 	line_axis = unit(V(J, L))
-	t_lo, t_hi = _slide_range(J, L, far, chord0)
+	t_lo, t_hi = _slide_range(J, L, chord0)
 	best = None
 	for i in range(SLIDE_STEPS):
 		slide = 0.0 if SLIDE_STEPS == 1 else t_lo + (t_hi - t_lo) * (i / float(SLIDE_STEPS - 1))
@@ -360,19 +276,22 @@ def _auto_line_then_cubic(J, P1, P2, far, L):
 			dev = rms_dev(orig_samples, sample_cubic(J2, prop_P1, prop_P2, far))
 			cost = W_KAPPA * kappa + W_DEV * dev + W_SLIDE * abs(slide) / chord0 + W_SOFT * s
 			rank = (0 if kappa <= KAPPA_OK else 1, cost, abs(slide), s)
-			cand = {
-				"prop_P1": prop_P1,
-				"prop_P2": prop_P2,
-				"prop_J": J2,
-				"line_axis": axis,
-				"soft": s,
-				"slide": slide,
-				"kappa": kappa,
-				"dev": dev,
-			}
+			cand = _auto_result(prop_P1, prop_P2, J2, axis, s, slide, kappa, dev)
 			if best is None or rank < best[0]:
 				best = (rank, cand)
 	return best[1] if best else None
+
+
+def _proposal(path, mode, j_idx, indices, points, auto):
+	geo = {
+		"path": path,
+		"mode": mode,
+		"j_idx": j_idx,
+	}
+	geo.update(indices)
+	geo.update(points)
+	geo.update(auto)
+	return geo
 
 
 def _junction_from_indices(path, j_idx):
@@ -399,28 +318,14 @@ def _junction_from_indices(path, j_idx):
 		auto = _auto_cubic_then_line(P0, P1, P2, J, L)
 		if auto is None:
 			return None, "err_junction"
-		return {
-			"path": path,
-			"mode": "cubic_then_line",
-			"j_idx": j_idx,
-			"P0_i": P0_i,
-			"P1_i": P1_i,
-			"P2_i": P2_i,
-			"L_i": L_i,
-			"P0": P0,
-			"P1": P1,
-			"P2": P2,
-			"J": J,
-			"L": L,
-			"prop_P1": auto["prop_P1"],
-			"prop_P2": auto["prop_P2"],
-			"prop_J": auto["prop_J"],
-			"line_axis": auto["line_axis"],
-			"soft": auto["soft"],
-			"slide": auto["slide"],
-			"kappa": auto["kappa"],
-			"dev": auto["dev"],
-		}, "ok"
+		return _proposal(
+			path,
+			"cubic_then_line",
+			j_idx,
+			{"P0_i": P0_i, "P1_i": P1_i, "P2_i": P2_i, "L_i": L_i},
+			{"P0": P0, "P1": P1, "P2": P2, "J": J, "L": L},
+			auto,
+		), "ok"
 
 	P0_i = j_idx
 	P1_i, P2_i = offs_next[0], offs_next[1]
@@ -432,30 +337,14 @@ def _junction_from_indices(path, j_idx):
 	auto = _auto_line_then_cubic(J, P1, P2, far, L)
 	if auto is None:
 		return None, "err_junction"
-	return {
-		"path": path,
-		"mode": "line_then_cubic",
-		"j_idx": j_idx,
-		"P0_i": P0_i,
-		"P1_i": P1_i,
-		"P2_i": P2_i,
-		"far_i": far_i,
-		"L_i": L_i,
-		"P0": J,
-		"P1": P1,
-		"P2": P2,
-		"J": J,
-		"L": L,
-		"far": far,
-		"prop_P1": auto["prop_P1"],
-		"prop_P2": auto["prop_P2"],
-		"prop_J": auto["prop_J"],
-		"line_axis": auto["line_axis"],
-		"soft": auto["soft"],
-		"slide": auto["slide"],
-		"kappa": auto["kappa"],
-		"dev": auto["dev"],
-	}, "ok"
+	return _proposal(
+		path,
+		"line_then_cubic",
+		j_idx,
+		{"P0_i": P0_i, "P1_i": P1_i, "P2_i": P2_i, "far_i": far_i, "L_i": L_i},
+		{"P0": J, "P1": P1, "P2": P2, "J": J, "L": L, "far": far},
+		auto,
+	), "ok"
 
 
 def _status_for_geo(geo, lang):
@@ -554,119 +443,54 @@ def run_soft_landing(lang="it"):
 
 # ── drawing ────────────────────────────────────────────────────────────────
 
-def _color_rgba(r, g, b, a):
-	if NSColor is None:
-		return None
-	try:
-		return NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, a)
-	except Exception:
-		return None
-
-
-def _glyphs_green(alpha=1.0):
-	color = NodeSmoothColor
-	if color is None:
-		try:
-			color = Glyphs.colorObjectToNSColor("GREEN")
-		except Exception:
-			color = None
-	if color is None:
-		color = _color_rgba(0.2, 0.75, 0.25, 1.0)
-	if color is None:
-		return None
-	try:
-		return color.colorWithAlphaComponent_(float(alpha))
-	except Exception:
-		return color
-
-
-def _scale_from_info(info):
-	if isinstance(info, dict):
-		for key in ("Scale", "scale", "ScaleFactor"):
-			if key in info:
-				try:
-					return float(info[key])
-				except Exception:
-					pass
-	return 1.0
-
-
-def _mark(pt, scale, color, radius_px=3.5):
-	if NSBezierPath is None or NSMakeRect is None or color is None:
-		return
-	rr = radius_px / max(scale, 0.01)
-	color.set()
-	NSBezierPath.bezierPathWithOvalInRect_(
-		NSMakeRect(pt[0] - rr, pt[1] - rr, rr * 2, rr * 2)
-	).fill()
-
-
-def _line(a, b, scale, color, width_px=1.0, dashed=False):
-	if NSBezierPath is None or color is None:
-		return
-	path = NSBezierPath.bezierPath()
-	path.moveToPoint_(tuple(a))
-	path.lineToPoint_(tuple(b))
-	path.setLineWidth_(max(0.25, width_px / max(scale, 0.01)))
-	if dashed:
-		dash = [3.0 / max(scale, 0.01), 2.5 / max(scale, 0.01)]
-		try:
-			path.setLineDash_count_phase_(dash, 2, 0.0)
-		except Exception:
-			pass
-	color.set()
-	path.stroke()
-
-
-def _draw_label(text, pt, scale, color):
-	if NSString is None or NSFont is None or color is None:
-		return
-	size = max(10.0, 11.0 / max(scale, 0.01))
-	attrs = {
-		NSFontAttributeName: NSFont.systemFontOfSize_(size),
-		NSForegroundColorAttributeName: color,
-	}
-	NSString.stringWithString_(text).drawAtPoint_withAttributes_(pt, attrs)
-
-
 def draw_soft_preview(layer, info, lang="it"):
 	try:
 		if NSBezierPath is None:
 			return
 		geo, status = resolve_junction(layer, lang=lang)
-		scale = _scale_from_info(info)
-		green = _glyphs_green(1.0)
-		dim = _glyphs_green(0.35)
+		scale = gvc.scale_from_info(info)
+		green = gvc.glyphs_green(1.0)
+		dim = gvc.glyphs_green(0.35)
 		if green is None:
 			return
 		if geo is None:
 			sel = [o for o in layer.selection if _is_oncurve(o)]
 			if sel:
-				_draw_label(status, (sel[0].x + 8.0 / scale, sel[0].y + 8.0 / scale), scale, green)
+				gvc.draw_label(
+					status,
+					(sel[0].x + 8.0 / scale, sel[0].y + 8.0 / scale),
+					scale,
+					green,
+				)
 			return
 
 		J0, L = geo["J"], geo["L"]
 		prop_J = geo.get("prop_J", J0)
 		prop_P1, prop_P2 = geo["prop_P1"], geo["prop_P2"]
 
-		_line(prop_J, L, scale, dim, width_px=2.0, dashed=False)
+		gvc.stroke_line(prop_J, L, scale, dim, width_px=2.0, dashed=False)
 		if abs(geo.get("slide", 0.0)) >= 0.5:
-			_line(J0, prop_J, scale, dim, width_px=1.0, dashed=True)
-			_mark(J0, scale, dim, radius_px=2.5)
+			gvc.stroke_line(J0, prop_J, scale, dim, width_px=1.0, dashed=True)
+			gvc.mark_point(J0, scale, dim, radius_px=2.5)
 
 		if geo["mode"] == "cubic_then_line":
-			_line(geo["P0"], prop_P1, scale, green, width_px=1.2)
-			_line(prop_P1, prop_P2, scale, green, width_px=0.8, dashed=True)
-			_line(prop_P2, prop_J, scale, green, width_px=1.2)
+			gvc.stroke_line(geo["P0"], prop_P1, scale, green, width_px=1.2)
+			gvc.stroke_line(prop_P1, prop_P2, scale, green, width_px=0.8, dashed=True)
+			gvc.stroke_line(prop_P2, prop_J, scale, green, width_px=1.2)
 		else:
-			_line(prop_J, prop_P1, scale, green, width_px=1.2)
-			_line(prop_P1, prop_P2, scale, green, width_px=0.8, dashed=True)
-			_line(prop_P2, geo["far"], scale, green, width_px=1.2)
+			gvc.stroke_line(prop_J, prop_P1, scale, green, width_px=1.2)
+			gvc.stroke_line(prop_P1, prop_P2, scale, green, width_px=0.8, dashed=True)
+			gvc.stroke_line(prop_P2, geo["far"], scale, green, width_px=1.2)
 
-		_mark(prop_J, scale, green, radius_px=4.0)
-		_mark(prop_P1, scale, green, radius_px=3.0)
-		_mark(prop_P2, scale, green, radius_px=3.0)
-		_draw_label(status, (prop_J[0] + 10.0 / scale, prop_J[1] + 10.0 / scale), scale, green)
+		gvc.mark_point(prop_J, scale, green, radius_px=4.0)
+		gvc.mark_point(prop_P1, scale, green, radius_px=3.0)
+		gvc.mark_point(prop_P2, scale, green, radius_px=3.0)
+		gvc.draw_label(
+			status,
+			(prop_J[0] + 10.0 / scale, prop_J[1] + 10.0 / scale),
+			scale,
+			green,
+		)
 	except Exception:
 		traceback.print_exc()
 
@@ -691,7 +515,7 @@ UI = {
 		"cancel": "Annulla",
 		"credit_prefix": "Sviluppo: ",
 		"credit_name": "Pasquale de Sario",
-		"site": "https://pasqualedesario.eu",
+		"site": "https://pasqualedesario.eu/#it",
 		"lang_button": "English",
 		"no_font": "Nessun font aperto.",
 		"no_glyph": "Seleziona un glifo in Edit View.",
@@ -748,304 +572,77 @@ UI = {
 
 
 def t(lang, key):
-	return UI.get(lang, UI["it"]).get(key, UI["it"].get(key, key))
-
-
-def open_site(url):
-	try:
-		if NSWorkspace is not None and NSURL is not None:
-			NSWorkspace.sharedWorkspace().openURL_(NSURL.URLWithString_(url))
-			return
-	except Exception:
-		pass
-	try:
-		webbrowser.open(url)
-	except Exception:
-		pass
-
-
-# ── UI helpers ─────────────────────────────────────────────────────────────
-
-def _ui_font(bold=False):
-	if not NSFont:
-		return None
-	if bold:
-		return NSFont.boldSystemFontOfSize_(UI_FONT_SIZE)
-	return NSFont.systemFontOfSize_(UI_FONT_SIZE)
-
-
-def _credit_font():
-	return NSFont.systemFontOfSize_(CREDIT_FONT_SIZE) if NSFont else None
-
-
-def _text_black():
-	if NSColor is None:
-		return None
-	try:
-		return NSColor.blackColor()
-	except Exception:
-		return None
-
-
-def _measure_text(text, font):
-	if NSString is None or font is None:
-		return float(len(text) * 6)
-	attrs = {NSFontAttributeName: font}
-	return float(NSString.stringWithString_(text).sizeWithAttributes_(attrs).width)
-
-
-def tint_panel_white(window):
-	if NSColor is None:
-		return
-	try:
-		white = NSColor.whiteColor()
-	except Exception:
-		return
-	try:
-		view = window.getNSView()
-		view.setWantsLayer_(True)
-		view.layer().setBackgroundColor_(white.CGColor())
-	except Exception:
-		pass
-	try:
-		nsw = window.getNSWindow()
-		nsw.setBackgroundColor_(white)
-		nsw.setOpaque_(True)
-	except Exception:
-		pass
-
-
-def set_window_title(window, title=SCRIPT_TITLE):
-	try:
-		window.getNSWindow().setTitle_(title)
-	except Exception:
-		pass
-
-
-def style_heading(box):
-	try:
-		field = box.getNSTextField()
-		font = _ui_font(bold=True)
-		if font:
-			field.setFont_(font)
-		black = _text_black()
-		if black is not None:
-			field.setTextColor_(black)
-		field.setDrawsBackground_(False)
-	except Exception:
-		pass
-
-
-def style_body(box):
-	try:
-		field = box.getNSTextField()
-		font = _ui_font(bold=False)
-		if font:
-			field.setFont_(font)
-		black = _text_black()
-		if black is not None:
-			field.setTextColor_(black)
-		field.setSelectable_(False)
-		field.setDrawsBackground_(False)
-	except Exception:
-		pass
-
-
-def style_checkbox(checkbox):
-	try:
-		ns = checkbox.getNSButton()
-		font = _ui_font(bold=False)
-		black = _text_black()
-		title = ns.title() or ""
-		attrs = {}
-		if font is not None:
-			attrs[NSFontAttributeName] = font
-			ns.setFont_(font)
-		if black is not None and NSForegroundColorAttributeName:
-			attrs[NSForegroundColorAttributeName] = black
-		if attrs and NSAttributedString is not None:
-			ns.setAttributedTitle_(
-				NSAttributedString.alloc().initWithString_attributes_(title, attrs)
-			)
-	except Exception:
-		pass
-
-
-def style_credit_line(button, prefix, name):
-	full = prefix + name
-	font = _credit_font()
-	base = _text_black()
-	link_color = _glyphs_green(1.0) or base
-	try:
-		ns = button.getNSButton()
-		ns.setBordered_(False)
-		ns.setButtonType_(0)
-		try:
-			ns.setAlignment_(0)
-		except Exception:
-			pass
-		if NSMutableAttributedString is None:
-			ns.setTitle_(full)
-			if font:
-				ns.setFont_(font)
-			return
-		attr = NSMutableAttributedString.alloc().initWithString_(full)
-		base_attrs = {}
-		if font is not None:
-			base_attrs[NSFontAttributeName] = font
-		if base is not None and NSForegroundColorAttributeName:
-			base_attrs[NSForegroundColorAttributeName] = base
-		if base_attrs:
-			attr.addAttributes_range_(base_attrs, (0, len(full)))
-		link_attrs = {}
-		if font is not None:
-			link_attrs[NSFontAttributeName] = font
-		if link_color is not None and NSForegroundColorAttributeName:
-			link_attrs[NSForegroundColorAttributeName] = link_color
-		if NSUnderlineStyleAttributeName is not None and NSUnderlineStyleSingle is not None:
-			link_attrs[NSUnderlineStyleAttributeName] = NSUnderlineStyleSingle
-		if link_attrs and name:
-			attr.addAttributes_range_(link_attrs, (len(prefix), len(name)))
-		ns.setAttributedTitle_(attr)
-		try:
-			x, y, _ow, h = button.getPosSize()
-			button.setPosSize((x, y, max(_measure_text(full, font) + 12.0, 80.0), h))
-		except Exception:
-			pass
-	except Exception:
-		pass
-
-
-def style_lang_chip(button, title=None):
-	try:
-		ns = button.getNSButton()
-		ns.setTitle_(title if title is not None else (ns.title() or ""))
-		ns.setBezelStyle_(NS_BEZEL_RECESSED)
-		try:
-			ns.setControlSize_(NS_CONTROL_SIZE_SMALL)
-		except Exception:
-			pass
-		font = _credit_font()
-		if font:
-			ns.setFont_(font)
-		try:
-			ns.setWantsLayer_(True)
-			layer = ns.layer()
-			if layer is not None:
-				layer.setCornerRadius_(8.0)
-				layer.setMasksToBounds_(True)
-		except Exception:
-			pass
-	except Exception:
-		pass
-
-
-def style_action_button(button, default=False, green_fill=False):
-	try:
-		ns = button.getNSButton()
-		if default:
-			ns.setKeyEquivalent_("\r")
-		font = _ui_font(bold=False)
-		black = _text_black()
-		title = ns.title() or ""
-		if green_fill:
-			soft = _glyphs_green(0.25)
-			if soft is not None:
-				try:
-					ns.setBezelColor_(soft)
-				except Exception:
-					pass
-		else:
-			try:
-				ns.setBezelColor_(None)
-			except Exception:
-				pass
-			try:
-				ns.setContentTintColor_(None)
-			except Exception:
-				pass
-		attrs = {}
-		if font is not None:
-			attrs[NSFontAttributeName] = font
-			ns.setFont_(font)
-		if black is not None and NSForegroundColorAttributeName:
-			attrs[NSForegroundColorAttributeName] = black
-		if attrs and title and NSAttributedString is not None:
-			ns.setAttributedTitle_(
-				NSAttributedString.alloc().initWithString_attributes_(title, attrs)
-			)
-	except Exception:
-		pass
+	return gvc.t(UI, lang, key)
 
 
 # ── dialog ─────────────────────────────────────────────────────────────────
 
 class GVSoftLandingDialog(object):
 	def __init__(self):
-		m, s, inn, W = UI_MARGIN, UI_SECTION, UI_INNER, UI_WIDTH
+		m, s, inn, W = gvc.UI_MARGIN, gvc.UI_SECTION, gvc.UI_INNER, gvc.UI_WIDTH
 		H = (
 			m
-			+ UI_TITLE_H + inn + UI_ABOUT_H + s
-			+ UI_TITLE_H + inn + UI_INSTR_BODY_H + s
-			+ UI_CHECK_H + s
+			+ gvc.UI_TITLE_H + inn + gvc.UI_ABOUT_H + s
+			+ gvc.UI_TITLE_H + inn + gvc.UI_INSTR_BODY_H + s
+			+ gvc.UI_CHECK_H + s
 			+ UI_STATUS_H + s
-			+ UI_BTN_H + s
-			+ UI_CREDIT_H
+			+ gvc.UI_BTN_H + s
+			+ gvc.UI_CREDIT_H
 			+ m
 		)
 
 		self.lang = "it"
 		self.show_preview = True
 		self.w = FloatingWindow((W, H), SCRIPT_TITLE)
-		tint_panel_white(self.w)
-		set_window_title(self.w)
+		gvc.tint_panel_white(self.w)
+		gvc.set_window_title(self.w, SCRIPT_TITLE)
 		y = m
 
-		self.w.aboutTitle = TextBox((m, y, -m, UI_TITLE_H), "")
-		style_heading(self.w.aboutTitle)
-		y += UI_TITLE_H + inn
-		self.w.aboutBody = TextBox((m, y, -m, UI_ABOUT_H), "")
-		style_body(self.w.aboutBody)
-		y += UI_ABOUT_H + s
+		self.w.aboutTitle = TextBox((m, y, -m, gvc.UI_TITLE_H), "")
+		gvc.style_heading(self.w.aboutTitle)
+		y += gvc.UI_TITLE_H + inn
+		self.w.aboutBody = TextBox((m, y, -m, gvc.UI_ABOUT_H), "")
+		gvc.style_body(self.w.aboutBody)
+		y += gvc.UI_ABOUT_H + s
 
-		self.w.instrTitle = TextBox((m, y, -m, UI_TITLE_H), "")
-		style_heading(self.w.instrTitle)
-		y += UI_TITLE_H + inn
-		self.w.instrBody = TextBox((m, y, -m, UI_INSTR_BODY_H), "")
-		style_body(self.w.instrBody)
-		y += UI_INSTR_BODY_H + s
+		self.w.instrTitle = TextBox((m, y, -m, gvc.UI_TITLE_H), "")
+		gvc.style_heading(self.w.instrTitle)
+		y += gvc.UI_TITLE_H + inn
+		self.w.instrBody = TextBox((m, y, -m, gvc.UI_INSTR_BODY_H), "")
+		gvc.style_body(self.w.instrBody)
+		y += gvc.UI_INSTR_BODY_H + s
 
 		self.w.preview = CheckBox(
-			(m, y, -m, UI_CHECK_H),
+			(m, y, -m, gvc.UI_CHECK_H),
 			t("it", "preview"),
 			value=True,
 			callback=self.toggle_preview_,
 		)
-		style_checkbox(self.w.preview)
-		y += UI_CHECK_H + s
+		gvc.style_checkbox(self.w.preview)
+		y += gvc.UI_CHECK_H + s
 
 		self.w.status = TextBox((m, y, -m, UI_STATUS_H), "")
-		style_body(self.w.status)
+		gvc.style_body(self.w.status)
 		y += UI_STATUS_H + s
 
-		bw = (W - m * 2 - UI_BTN_GAP) / 2.0
-		self.w.run = Button((m, y, bw, UI_BTN_H), "", callback=self.apply_)
-		self.w.cancel = Button((m + bw + UI_BTN_GAP, y, bw, UI_BTN_H), "", callback=self.cancel_)
-		style_action_button(self.w.run, default=True, green_fill=True)
-		style_action_button(self.w.cancel)
-		y += UI_BTN_H + s
+		bw = (W - m * 2 - gvc.UI_BTN_GAP) / 2.0
+		self.w.run = Button((m, y, bw, gvc.UI_BTN_H), "", callback=self.apply_)
+		self.w.cancel = Button((m + bw + gvc.UI_BTN_GAP, y, bw, gvc.UI_BTN_H), "", callback=self.cancel_)
+		gvc.style_action_button(self.w.run, default=True, green_fill=True)
+		gvc.style_action_button(self.w.cancel)
+		y += gvc.UI_BTN_H + s
 
 		self.w.credit = Button(
-			(m, y, W - m * 2 - UI_LANG_W - 8, UI_CREDIT_H),
+			(m, y, W - m * 2 - gvc.UI_LANG_W - 8, gvc.UI_CREDIT_H),
 			"",
 			callback=self.open_credit_,
 		)
 		self.w.lang = Button(
-			(W - m - UI_LANG_W, y, UI_LANG_W, UI_CREDIT_H),
+			(W - m - gvc.UI_LANG_W, y, gvc.UI_LANG_W, gvc.UI_CREDIT_H),
 			"",
 			callback=self.toggle_lang_,
 		)
-		style_lang_chip(self.w.lang)
+		gvc.style_lang_chip(self.w.lang)
 
 		self.apply_language()
 		self.refresh_status_()
@@ -1054,18 +651,18 @@ class GVSoftLandingDialog(object):
 		Glyphs.addCallback(self._ui_update, UPDATEINTERFACE)
 		Glyphs.redraw()
 		self.w.open()
-		set_window_title(self.w)
+		gvc.set_window_title(self.w, SCRIPT_TITLE)
 
 	def apply_language(self):
 		L = self.lang
 		self.w.aboutTitle.set(t(L, "about_title"))
-		style_heading(self.w.aboutTitle)
+		gvc.style_heading(self.w.aboutTitle)
 		self.w.aboutBody.set(t(L, "about_body"))
-		style_body(self.w.aboutBody)
+		gvc.style_body(self.w.aboutBody)
 		self.w.instrTitle.set(t(L, "instructions"))
-		style_heading(self.w.instrTitle)
+		gvc.style_heading(self.w.instrTitle)
 		self.w.instrBody.set(t(L, "body"))
-		style_body(self.w.instrBody)
+		gvc.style_body(self.w.instrBody)
 		try:
 			self.w.preview.setTitle(t(L, "preview"))
 		except Exception:
@@ -1073,19 +670,19 @@ class GVSoftLandingDialog(object):
 				self.w.preview.getNSButton().setTitle_(t(L, "preview"))
 			except Exception:
 				pass
-		style_checkbox(self.w.preview)
+		gvc.style_checkbox(self.w.preview)
 		self.w.run.setTitle(t(L, "apply"))
 		self.w.cancel.setTitle(t(L, "cancel"))
-		style_action_button(self.w.run, default=True, green_fill=True)
-		style_action_button(self.w.cancel)
-		style_credit_line(
+		gvc.style_action_button(self.w.run, default=True, green_fill=True)
+		gvc.style_action_button(self.w.cancel)
+		gvc.style_credit_line(
 			self.w.credit,
 			t(L, "credit_prefix"),
 			t(L, "credit_name"),
 		)
-		style_lang_chip(self.w.lang, t(L, "lang_button"))
-		tint_panel_white(self.w)
-		set_window_title(self.w)
+		gvc.style_lang_chip(self.w.lang, t(L, "lang_button"))
+		gvc.tint_panel_white(self.w)
+		gvc.set_window_title(self.w, SCRIPT_TITLE)
 		self.refresh_status_()
 
 	def refresh_status_(self):
@@ -1095,12 +692,12 @@ class GVSoftLandingDialog(object):
 			_geo, msg = resolve_junction(font.selectedLayers[0], lang=self.lang)
 		try:
 			self.w.status.set(msg)
-			style_body(self.w.status)
+			gvc.style_body(self.w.status)
 		except Exception:
 			pass
 
 	def open_credit_(self, sender):
-		open_site(t(self.lang, "site"))
+		gvc.open_site(t(self.lang, "site"))
 
 	def toggle_lang_(self, sender):
 		self.lang = "en" if self.lang == "it" else "it"
@@ -1134,17 +731,10 @@ class GVSoftLandingDialog(object):
 		self.w.close()
 
 	def _remove_callbacks(self):
-		for fn, hook in (
+		gvc.remove_glyphs_callbacks((
 			(self._draw, DRAWFOREGROUND),
 			(self._ui_update, UPDATEINTERFACE),
-		):
-			try:
-				Glyphs.removeCallback(fn, hook)
-			except Exception:
-				try:
-					Glyphs.removeCallback(fn)
-				except Exception:
-					pass
+		))
 
 	def _on_close(self, sender):
 		self._remove_callbacks()

@@ -72,6 +72,7 @@ Stays in PostScript cubics. Finds a small G1 landing edit; slides the junction a
 ```text
 GV-Scripts/
 ├── GV/
+│   ├── gv_common.py          # shared helpers (not a menu item)
 │   ├── GV-Pill Cut.py        # MenuTitle: GV-Pill Cut
 │   └── GV-Soft Landing.py    # MenuTitle: GV-Soft Landing
 ├── docs/

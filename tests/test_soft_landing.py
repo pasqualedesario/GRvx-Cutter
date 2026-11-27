@@ -34,7 +34,11 @@ def _load_module():
 	sys.modules.setdefault("AppKit", type(sys)("AppKit"))
 	sys.modules.setdefault("Foundation", type(sys)("Foundation"))
 
-	spec = importlib.util.spec_from_file_location("grvx_soft_landing", SCRIPT)
+	gv_dir = str(SCRIPT.parent)
+	if gv_dir not in sys.path:
+		sys.path.insert(0, gv_dir)
+
+	spec = importlib.util.spec_from_file_location("gv_soft_landing", SCRIPT)
 	mod = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(mod)
 	return mod
@@ -59,7 +63,9 @@ class SoftLandingTests(unittest.TestCase):
 		cls.m = _load_module()
 
 	def _e_bottom_path(self):
-		OFF, CURVE, LINE = self.m.OFFCURVE, self.m.CURVE, self.m.LINE
+		# Soft Landing only needs OFFCURVE for type checks; on-curve kinds are opaque.
+		OFF = self.m.OFFCURVE
+		CURVE, LINE = "curve", "line"
 		return _Path(
 			[
 				_Node(LINE, 67, 470),
