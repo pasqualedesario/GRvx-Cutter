@@ -1,4 +1,4 @@
-# MenuTitle: GRvx Cutter
+# MenuTitle: GV-Pill Cut
 # -*- coding: utf-8 -*-
 __doc__ = """
 Cuts a geometric semicircle into a stem (including diagonals).
@@ -60,7 +60,7 @@ except Exception:
 
 KAPPA = 4.0 * math.tan(math.pi / 8.0) / 3.0
 MAX_SPAN_NODES = 14
-SCRIPT_TITLE = "GRvx Cutter"
+SCRIPT_TITLE = "GV-Pill Cut"
 __version__ = "0.1.2"
 
 # UI layout (SECTION == window margin)
@@ -624,7 +624,7 @@ def semicircle_into(A2, B2, center, into):
 
 UI = {
 	"it": {
-		"about_title": "Cos’è GRvx Cutter",
+		"about_title": "Cos’è GV-Pill Cut",
 		"about_body": (
 			"Inserisce una semicirconferenza su un’asta (retta o diagonale) "
 			"con diametro perpendicolare all’asse dell’asta."
@@ -665,7 +665,7 @@ UI = {
 		"err_rebuild": "Ricostruzione del path non riuscita.",
 	},
 	"en": {
-		"about_title": "What is GRvx Cutter",
+		"about_title": "What is GV-Pill Cut",
 		"about_body": (
 			"Inserts a semicircle on a stem (straight or diagonal) "
 			"with the diameter perpendicular to the stem axis."
@@ -1052,7 +1052,7 @@ def style_action_button(button, default=False, green_fill=False):
 
 # ── dialog ─────────────────────────────────────────────────────────────────
 
-class GRvxCutterDialog(object):
+class GVPillCutDialog(object):
 	def __init__(self):
 		m, s, inn, W = UI_MARGIN, UI_SECTION, UI_INNER, UI_WIDTH
 		H = (
@@ -1229,6 +1229,6 @@ class GRvxCutterDialog(object):
 
 if __name__ == "__main__":
 	if HAS_VANILLA:
-		GRvxCutterDialog()
+		GVPillCutDialog()
 	else:
 		run_cutter("dentro")

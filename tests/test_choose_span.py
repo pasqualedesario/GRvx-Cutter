@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Regression tests for GRvx Cutter span selection (no Glyphs required)."""
+"""Regression tests for GV-Pill Cut span selection (no Glyphs required)."""
 
 from __future__ import annotations
 
