@@ -4,9 +4,6 @@
 
 Open-source [Glyphs](https://glyphsapp.com) scripts (prefix **GV-**).
 
-
-![GV-Pill Cut panel and goniometer preview in Glyphs](docs/preview.png)
-
 ## Scripts
 
 | Script | Menu | What it does |
@@ -33,6 +30,8 @@ Open-source [Glyphs](https://glyphsapp.com) scripts (prefix **GV-**).
 
 ## Usage — GV-Pill Cut
 
+![GV-Pill Cut panel and goniometer preview](docs/pill-cut.png)
+
 1. Open a glyph in Edit View.
 2. Select **exactly two on-curve nodes** on opposite sides of the stem (the ends of the cut diameter).
 3. The **goniometer** preview shows the circle (toggle in the panel).
@@ -52,6 +51,8 @@ The diameter is aligned perpendicular to the stem axis when the stem can be reco
 
 ## Usage — GV-Soft Landing
 
+![GV-Soft Landing panel and curve preview](docs/soft-landing.png)
+
 1. Open a glyph in Edit View.
 2. Select the **on-curve junction** where a cubic meets a straight segment (or both ends of that cubic).
 3. Preview shows the automatic proposal (handles + optional junction slide along the straight).
@@ -69,12 +70,13 @@ Stays in PostScript cubics. Finds a small G1 landing edit; slides the junction a
 ## Development
 
 ```text
-GRvx-Cutter/
+GV-Scripts/
 ├── GV/
 │   ├── GV-Pill Cut.py        # MenuTitle: GV-Pill Cut
 │   └── GV-Soft Landing.py    # MenuTitle: GV-Soft Landing
 ├── docs/
-│   └── preview.png
+│   ├── pill-cut.png
+│   └── soft-landing.png
 ├── tests/
 │   ├── test_choose_span.py
 │   └── test_soft_landing.py
